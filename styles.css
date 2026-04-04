@@ -1,0 +1,169 @@
+/* --- MathPlot Container --- */
+.mathplot-container {
+    margin: 0 auto; /* Center the container */
+    display: flex;
+    flex-direction: column;
+    border-radius: 8px;
+    overflow: hidden;
+    max-width: 100%; /* Ensure responsiveness */
+    box-sizing: border-box; /* Handle padding/border correctly */
+    /* Note: width, border, background are set dynamically in JS */
+}
+
+/* --- Header & Legend --- */
+.mathplot-header {
+    padding: 8px 12px;
+    background-color: rgba(255, 255, 255, 0.03);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    min-height: 36px;
+}
+
+.mathplot-title-text {
+    font-weight: 600;
+    font-size: 0.9em;
+}
+
+.mathplot-legend-container {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.mathplot-legend-btn {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    border: none;
+    cursor: pointer;
+    font-weight: 600;
+    transition: transform 0.1s;
+}
+
+/* --- Chart Area --- */
+.plot-div {
+    position: relative;
+    width: 100%; 
+    /* Height is set dynamically */
+}
+
+/* --- Controls Area --- */
+.mathplot-controls {
+    padding: 10px;
+    background-color: rgba(0, 0, 0, 0.2);
+    display: none; /* Toggled in JS */
+    flex-direction: column;
+    gap: 8px;
+}
+
+.mathplot-sliders-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.mathplot-table-action {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 4px;
+}
+
+.mathplot-btn {
+    padding: 4px 12px;
+    font-size: 11px;
+    font-family: sans-serif;
+    border-radius: 4px;
+    border: 1px solid #444;
+    background: rgba(50, 50, 50, 0.5);
+    color: #ccc;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.mathplot-btn:hover:not(:disabled) {
+    background: #444;
+    color: #fff;
+}
+
+.mathplot-btn-disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* --- Slider Component --- */
+.mathplot-slider-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+}
+
+.mathplot-play-btn.active {
+    background: #4cc9f0;
+    color: #000;
+    border-color: #4cc9f0;
+}
+
+.mathplot-slider-label {
+    font-weight: bold;
+    width: 30px;
+}
+
+.mathplot-slider-input {
+    flex: 1;
+    cursor: pointer;
+}
+
+.mathplot-slider-val {
+    width: 40px;
+    text-align: right;
+    font-family: monospace;
+}
+
+/* --- Table Area --- */
+.mathplot-table {
+    display: none; /* Toggled in JS */
+    flex-direction: column;
+    max-height: 350px;
+    background-color: #181818;
+    overflow: hidden;
+}
+
+.mathplot-table-wrapper {
+    overflow: auto;
+    flex: 1;
+    width: 100%;
+}
+
+.mathplot-data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: sans-serif;
+}
+
+.mathplot-tr-odd {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.mathplot-table-info {
+    padding: 4px 8px;
+    font-size: 10px;
+    color: #888;
+}
+
+.mathplot-no-data {
+    padding: 10px;
+    color: #888;
+}
+
+/* --- Error --- */
+.mathplot-error {
+    color: #ff6b6b;
+    padding: 16px;
+    border: 1px solid #ff6b6b;
+    background-color: rgba(255, 107, 107, 0.1);
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 12px;
+}
