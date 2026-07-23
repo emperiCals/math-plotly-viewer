@@ -386,10 +386,10 @@ export function computePlot(parsed: ParseResult, params: Record<string, number>,
                 const xA: number[] = [], yA: number[] = [], zA: number[] = [], uA: number[] = [], vA: number[] = [], wA: number[] = [];
                 const tableRows: any[][] = [];
 
-                const mathObj = window.math;
-                const cX = mathObj.compile(arrayExprs[0]);
-                const cY = mathObj.compile(arrayExprs[1]);
-                const cZ = isV3D ? mathObj.compile(arrayExprs[2]) : null;
+                // Expressions are already compiled once in the parser
+                const cX = compiled.x;
+                const cY = compiled.y;
+                const cZ = isV3D ? compiled.z : null;
 
                 const dx = (xR.max - xR.min) / xSteps;
                 const dy = (yR.max - yR.min) / ySteps;
