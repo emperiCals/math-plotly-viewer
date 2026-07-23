@@ -1,5 +1,6 @@
 import { ParseResult, ComputeResult, MathPlotSettings, PlotGroup, TableData } from "../types";
 import { DEFAULT_PALETTE } from "../constants";
+import { marchingCubes } from "./marchingCubes";
 
 export function computePlot(parsed: ParseResult, params: Record<string, number>, settings: MathPlotSettings): ComputeResult {
     try {
@@ -336,40 +337,22 @@ export function computePlot(parsed: ParseResult, params: Record<string, number>,
                 const yR = getAxisRange('y', config);
                 const zR = getAxisRange('z', config);
 
-                const targetPoints = quality * 200;
-                const xA: number[] = [], yA: number[] = [], zA: number[] = [];
-                const epsilon = 0.001;
-                const getGradient = (x: number, y: number, z: number, val: number) => {
-                    const fx = evaluate(compiled.main, { x: x + epsilon, y, z });
-                    const fy = evaluate(compiled.main, { x, y: y + epsilon, z });
-                    const fz = evaluate(compiled.main, { x, y, z: z + epsilon });
-                    return [(fx - val) / epsilon, (fy - val) / epsilon, (fz - val) / epsilon];
+                // Marching cubes over a regular grid; resolution capped to avoid memory blowups
+                const resolution = Math.min(Math.max(quality, 4), 128);
+
+                // Reuse a single scope object: only x/y/z change per sample
+                const scope: any = Object.assign({}, params);
+                const field = (x: number, y: number, z: number) => {
+                    scope.x = x; scope.y = y; scope.z = z;
+                    return compiled.main.evaluate(scope);
                 };
 
-                let attempts = 0;
-                const maxAttempts = targetPoints * 3;
-                const rnd = (min: number, max: number) => min + Math.random() * (max - min);
-
-                while (xA.length < targetPoints && attempts < maxAttempts) {
-                    attempts++;
-                    let px = rnd(xR.min, xR.max), py = rnd(yR.min, yR.max), pz = rnd(zR.min, zR.max);
-                    let converged = false;
-                    for (let iter = 0; iter < 5; iter++) {
-                        let val;
-                        try { val = evaluate(compiled.main, { x: px, y: py, z: pz }); } catch (e) { break; }
-                        if (!isFinite(val)) break;
-                        if (Math.abs(val) < 0.05) { converged = true; break; }
-                        const grad = getGradient(px, py, pz, val);
-                        const magSq = grad[0] * grad[0] + grad[1] * grad[1] + grad[2] * grad[2];
-                        if (magSq < 1e-6) break;
-                        const step = val / magSq;
-                        px -= step * grad[0]; py -= step * grad[1]; pz -= step * grad[2];
-                        if (px < xR.min * 1.5 || px > xR.max * 1.5 || py < yR.min * 1.5 || py > yR.max * 1.5 || pz < zR.min * 1.5 || pz > zR.max * 1.5) { converged = false; break; }
-                    }
-                    if (converged) { xA.push(px); yA.push(py); zA.push(pz); }
+                const mesh = marchingCubes(field, xR, yR, zR, resolution);
+                if (mesh.indices.length === 0) {
+                    throw new Error("No surface found in range (isolevel 0). Check the x/y/z ranges or increase 'samples'.");
                 }
-                currentTraces.push({ type: 'scatter3d', mode: 'markers', x: xA, y: yA, z: zA, name: traceName, marker: { size: 2, color: zA, colorscale: settings.colorscale3D, opacity: 0.7, showscale: index === 0 } });
-                layout.scene = { xaxis: { title: 'X' }, yaxis: { title: 'Y' }, zaxis: { title: 'Z' }, camera: { eye: { x: 1.5, y: 1.5, z: 1.5 } } };
+
+                currentTraces.push({ type: 'three-mesh', positions: mesh.positions, indices: mesh.indices, name: traceName, showlegend: false, color: finalCurveColor });
                 currentTableData = { type: 'series', headers: ['x', 'y', 'z'], rows: [] };
 
             } else if (type === 'vector2d' || type === 'vector3d') {

@@ -1,6 +1,8 @@
 import { MathPlotSettings, TableData, ParameterDef, IRenderChild, ComputeResult } from "../types";
 import { parseScript } from "../math/parser";
 import { computePlot } from "../math/compute";
+import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 export function renderError(container: HTMLElement, code: string, msg: string) {
     container.innerHTML = "";
@@ -208,6 +210,10 @@ export function renderPlot(container: HTMLElement, source: string, settings: Mat
                 console.warn("MathPlotly resize skipped:", e);
             }
         }
+        if (threeDiv) {
+            threeDiv.style.height = plotDiv ? plotDiv.style.height : threeDiv.style.height;
+            updateThreeSize();
+        }
     });
     resizeObserver.observe(container);
 
@@ -215,6 +221,7 @@ export function renderPlot(container: HTMLElement, source: string, settings: Mat
         renderChild.registerOnUnload(() => {
             mobileQuery.removeEventListener("change", onMediaChange);
             resizeObserver.disconnect();
+            disposeThree();
         });
     }
 
@@ -398,6 +405,121 @@ export function renderPlot(container: HTMLElement, source: string, settings: Mat
         }
     };
 
+    // --- Three.js surface rendering (implicit3d marching cubes meshes) ---
+    // Mixed groups (Plotly traces + three-mesh traces) are handled simply:
+    // three-mesh surfaces render in their own container below the Plotly div.
+    let threeDiv: HTMLElement | null = null;
+    let threeCtx: any = null;
+
+    const disposeThree = () => {
+        if (!threeCtx) return;
+        cancelAnimationFrame(threeCtx.rafId);
+        threeCtx.controls.dispose();
+        threeCtx.meshes.forEach((mesh: any) => {
+            mesh.geometry.dispose();
+            mesh.material.dispose();
+        });
+        threeCtx.meshes.clear();
+        threeCtx.renderer.dispose();
+        threeCtx = null;
+        if (threeDiv) { threeDiv.remove(); threeDiv = null; }
+    };
+
+    const ensureThreeContext = () => {
+        if (threeCtx) return;
+        threeDiv = container.createEl("div", { cls: "three-div" });
+        threeDiv.style.height = plotDiv.style.height || settings.defaultBlockHeight;
+
+        const width = threeDiv.clientWidth || 600;
+        const height = threeDiv.clientHeight || 400;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(width, height);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        threeDiv.appendChild(renderer.domElement);
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(45, width / height, 0.01, 1000);
+        camera.position.set(1.5, 1.5, 1.5);
+
+        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+        dirLight.position.set(3, 5, 4);
+        scene.add(dirLight);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+
+        threeCtx = { renderer, scene, camera, controls, meshes: new Map<string, any>(), rafId: 0, fitted: false };
+
+        const loop = () => {
+            if (!threeCtx) return;
+            threeCtx.rafId = requestAnimationFrame(loop);
+            threeCtx.controls.update();
+            threeCtx.renderer.render(threeCtx.scene, threeCtx.camera);
+        };
+        loop();
+    };
+
+    const updateThreeSize = () => {
+        if (!threeCtx || !threeDiv) return;
+        const width = threeDiv.clientWidth, height = threeDiv.clientHeight;
+        if (width <= 0 || height <= 0) return;
+        threeCtx.camera.aspect = width / height;
+        threeCtx.camera.updateProjectionMatrix();
+        threeCtx.renderer.setSize(width, height);
+    };
+
+    const updateThreeMeshes = (meshTraces: any[]) => {
+        ensureThreeContext();
+        const seen = new Set<string>();
+
+        meshTraces.forEach((trace, i) => {
+            const key = trace.name || `mesh-${i}`;
+            seen.add(key);
+
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.BufferAttribute(trace.positions, 3));
+            geometry.setIndex(trace.indices);
+            geometry.computeVertexNormals();
+
+            const existing = threeCtx.meshes.get(key);
+            if (existing) {
+                // Parameter animation: swap geometry only, keep renderer/camera/controls (view preserved)
+                existing.geometry.dispose();
+                existing.geometry = geometry;
+            } else {
+                const material = new THREE.MeshStandardMaterial({ color: trace.color || settings.curveColor, side: THREE.DoubleSide, roughness: 0.6, metalness: 0.1 });
+                const mesh = new THREE.Mesh(geometry, material);
+                threeCtx.scene.add(mesh);
+                threeCtx.meshes.set(key, mesh);
+            }
+
+            // Fit the camera once, on the first geometry
+            if (!threeCtx.fitted) {
+                geometry.computeBoundingSphere();
+                const bs = geometry.boundingSphere;
+                if (bs && isFinite(bs.radius) && bs.radius > 0) {
+                    threeCtx.camera.position.set(bs.center.x + bs.radius * 2.2, bs.center.y + bs.radius * 1.8, bs.center.z + bs.radius * 2.2);
+                    threeCtx.controls.target.copy(bs.center);
+                    threeCtx.scene.add(new THREE.AxesHelper(bs.radius * 1.2));
+                    threeCtx.fitted = true;
+                }
+            }
+        });
+
+        // Drop meshes whose traces disappeared
+        threeCtx.meshes.forEach((mesh: any, key: string) => {
+            if (!seen.has(key)) {
+                threeCtx.scene.remove(mesh);
+                mesh.geometry.dispose();
+                mesh.material.dispose();
+                threeCtx.meshes.delete(key);
+            }
+        });
+
+        updateThreeSize();
+    };
+
     const updatePlotVisuals = () => {
         if (!latestResult) return;
 
@@ -408,6 +530,15 @@ export function renderPlot(container: HTMLElement, source: string, settings: Mat
             if (latestResult.plotGroups[activeDatasetIndex]) {
                 activeTraces = latestResult.plotGroups[activeDatasetIndex].traces;
             }
+        }
+
+        const threeMeshTraces = activeTraces.filter(t => t.type === 'three-mesh');
+        const plotlyTraces = activeTraces.filter(t => t.type !== 'three-mesh');
+
+        if (threeMeshTraces.length > 0) {
+            updateThreeMeshes(threeMeshTraces);
+        } else if (threeCtx) {
+            disposeThree();
         }
 
         const finalLayout = Object.assign({}, latestResult.layout, {
@@ -421,10 +552,13 @@ export function renderPlot(container: HTMLElement, source: string, settings: Mat
             uirevision: 'mathplot-animation',
         });
 
-        Plotly.react(plotDiv, activeTraces, finalLayout, {
-            responsive: true,
-            displayModeBar: false
-        });
+        plotDiv.style.display = plotlyTraces.length > 0 ? "" : "none";
+        if (plotlyTraces.length > 0) {
+            Plotly.react(plotDiv, plotlyTraces, finalLayout, {
+                responsive: true,
+                displayModeBar: false
+            });
+        }
 
         if (isTableVisible && activeAnimations === 0) {
             renderTableContent();
@@ -437,10 +571,12 @@ export function renderPlot(container: HTMLElement, source: string, settings: Mat
         latestResult = result;
 
         if (result.error) {
+            disposeThree();
             renderError(plotDiv, "ERR_EVAL", typeof result.error === 'string' ? result.error : result.error.message || String(result.error));
             return;
         }
         if (result.plotGroups.length === 0) {
+            disposeThree();
             renderError(plotDiv, "ERR_NO_DATA", "No data generated");
             return;
         }
