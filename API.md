@@ -82,9 +82,21 @@ Math Plotly Viewer 是一个 Obsidian 插件，通过 ` ```plot ` 代码块在�
 根据解析结果、当前参数值和设置，数值采样并生成 Plotly 的 traces 与 layout：
 
 - 解析全局/局部的 `range`（`[min, max]`）、`step`、`samples` 决定采样范围与分辨率（上限 5000）；
-- 对每种绘图类型生成对应的 Plotly trace（2D 折线、surface、scatterpolar、scatter3d、contour、cone、向量场线段+三角标记等；`implicit3d` 用牛顿迭代随机采样点云）；
-- 同时为每条曲线生成 `TableData`（`series` 或 `grid`）供数据表格展示；
+- 对每种绘图类型生成对应的 Plotly trace（2D 折线、surface、scatterpolar、scatter3d、contour、cone、向量场线段+三角标记等；`implicit3d` 例外，见下）；
+- `implicit3d` 分支：在 `xrange`/`yrange`/`zrange` 规则网格上采样隐式函数（复用单个 scope 对象，只改 x/y/z），再调用 `marchingCubes()` 提取 0 等值面。分辨率取 `samples` 参数或 `settings.renderQuality`（默认 40），钳制在 [4,128]。输出 `{ type: 'three-mesh', positions: Float32Array, indices: number[], name, showlegend: false, color }` trace，由 renderer 用 Three.js 渲染（非 Plotly）；网格内无曲面时报错提示检查范围或增大 `samples`；
+- 同时为每条曲线生成 `TableData`（`series` 或 `grid`）供数据表格展示（`implicit3d` 为占位空表）；
 - 统一应用网格/文字颜色等坐标轴样式，返回 `{ plotGroups, layout }`；出错返回 `error` 字段。
+
+性能说明：所有方程表达式在 `parseScript` 中只 `math.compile` 一次，挂在 `PlotDef.compiled`（`main` 或 `x`/`y`/`z`）；`computePlot` 各分支（包括 `vector2d`/`vector3d`、`implicit3d`）直接复用预编译结果，采样时只更新 scope 对象后调用 `evaluate`，不重复编译。
+
+### `math/marchingCubes.ts`
+
+#### `marchingCubes(field: (x: number, y: number, z: number) => number, xrange: {min, max}, yrange: {min, max}, zrange: {min, max}, resolution: number): MarchingCubesResult`
+
+经典 marching cubes（Lorensen-Cline）算法，在规则网格上提取隐式函数的 0 等值面。查找表（edgeTable/triTable）取自 three.js 官方 addon（`examples/jsm/objects/MarchingCubes.js`）的 canonical 数据。
+
+- `field` 在三轴范围张成的 `resolution³` 规则网格上采样；含 NaN 的格子整体跳过；
+- 棱上交点用线性插值计算；返回 `MarchingCubesResult = { positions: Float32Array, indices: number[] }`（非索引化三角形，positions 为顶点坐标 xyz 连续排列，indices 顺序引用）。
 
 ### `ui/renderer.ts`
 
@@ -92,6 +104,17 @@ Math Plotly Viewer 是一个 Obsidian 插件，通过 ` ```plot ` 代码块在�
 - `renderTable(container: HTMLElement, tableData: TableData, settings: MathPlotSettings)` — 渲染数据表格；`grid` 类型渲染为二维矩阵，`series` 类型渲染为带行号的行列表（最多 2000 行）。
 - `renderSlider(container: HTMLElement, param: ParameterDef, settings: MathPlotSettings, onUpdate: (val: number) => void, onPlayStateChange: (playing: boolean) => void)` — 渲染参数滑块及 Play/Pause 动画按钮（约 15fps 往返播放）；拖动或播放时通过 `onUpdate` 回传新值，播放状态变化通过 `onPlayStateChange` 通知。
 - `renderPlot(container: HTMLElement, source: string, settings: MathPlotSettings, renderChild?: IRenderChild)` — 渲染管线入口：解析 → 计算 → 用 `Plotly.react` 绘制；负责容器尺寸（区分桌面/移动端，监听媒体查询与 `ResizeObserver`）、边框/背景样式、标题与图例按钮（多曲线时可切换显示单条/全部）、参数滑块区、"Show Table" 数据表格切换；通过 `renderChild.registerOnUnload` 注册清理逻辑。
+
+#### `three-mesh` trace 的 Three.js 渲染（`implicit3d`）
+
+`renderPlot` 将 active traces 分为两组：Plotly traces 走 `Plotly.react`，`three-mesh` traces 在 Plotly div 下方独立的 `.three-div` 容器中用 Three.js 渲染：
+
+- 场景：`WebGLRenderer`（antialias + alpha 透明背景）、`PerspectiveCamera(45°)`、`OrbitControls` 交互旋转/缩放、`AmbientLight` + `DirectionalLight`、`AxesHelper`（按包围球半径缩放）、`MeshStandardMaterial`（`DoubleSide`，roughness 0.6/metalness 0.1）；`requestAnimationFrame` 循环驱动 `controls.update()` + `render()`；
+- 首次添加网格时按包围球自动取景（`fitted` 标记）；参数动画时只替换 `BufferGeometry`（释放旧 geometry），保持相机视角不变；不再需要的 mesh 从场景移除并释放；
+- `ResizeObserver` 同步 `.three-div` 尺寸到相机 aspect 与 renderer；
+- 清理（`renderChild.registerOnUnload`）：`cancelAnimationFrame`、`controls.dispose()`、逐 mesh 释放 geometry/material、`renderer.dispose()`、移除 `.three-div`。
+
+Three.js 通过 npm 依赖（工作区根目录 `three`）由 esbuild 打进 `main.js` bundle，不依赖 `window` 全局注入；因根 esbuild 未 minify，`main.js` 体积约 1.26MB。
 
 ### `ui/settingsTab.ts`
 
