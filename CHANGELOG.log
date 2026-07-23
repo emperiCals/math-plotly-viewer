@@ -4,3 +4,4 @@
 
 2026-07-23 | perf | compute.ts vector2d/vector3d 复用 parser 预编译表达式，不再每次 computePlot 重复 math.compile
 2026-07-23 | feat | implicit3d 重写为 marching cubes（math/marchingCubes.ts）+ Three.js 网格渲染（three-mesh trace，.three-div 容器，OrbitControls）
+2026-07-24 | docs | 记录新增 dev-env 测试体系（vitest 单测 + 浏览器渲染测试），AGENTS.md 补充 npm test / test:browser 用法
