@@ -4828,6 +4828,7 @@ function computePlot(parsed, params, settings) {
     const finalGridColor = parsed.globalConfig["grid"] || settings.gridColor;
     const finalTextColor = settings.textColor;
     const is3D = parsed.plots.some((p) => ["explicit3d", "parametric3d", "vector3d", "implicit3d", "spherical", "cylindrical"].includes(p.type));
+    const allowEqualAspect = !is3D && parsed.plots.length > 0 && parsed.plots.every((p) => p.type === "implicit2d" || p.type === "vector2d");
     const topMargin = 10;
     const margin = is3D ? { l: 0, r: 0, t: topMargin, b: 0 } : { l: 60, r: 60, t: Math.max(topMargin, 40), b: 60 };
     const layout = {
@@ -5112,7 +5113,50 @@ function computePlot(parsed, params, settings) {
           zMatrix.push(row);
         }
         currentTraces.push({ z: zMatrix, x: xArr, y: yArr, type: "contour", name: traceName, showscale: false, contours: { coloring: "none", showlines: true, start: 0, end: 0, size: 0 }, line: { width: finalLineWidth, color: finalCurveColor }, hovertemplate: "x: %{x:.4f}<br>y: %{y:.4f}<extra></extra>" });
-        layout.xaxis = { scaleanchor: "x", scaleratio: 1 };
+        if (allowEqualAspect)
+          layout.yaxis = { scaleanchor: "x", scaleratio: 1 };
+        const hasExplicitRange = config["xrange"] || config["yrange"] || config["range"] || config["domain"] || parsed.globalConfig["xrange"] || parsed.globalConfig["yrange"] || parsed.globalConfig["range"] || parsed.globalConfig["domain"];
+        if (!hasExplicitRange) {
+          let bxMin = Infinity, bxMax = -Infinity, byMin = Infinity, byMax = -Infinity, found = false;
+          const mark = (x, y) => {
+            found = true;
+            if (x < bxMin)
+              bxMin = x;
+            if (x > bxMax)
+              bxMax = x;
+            if (y < byMin)
+              byMin = y;
+            if (y > byMax)
+              byMax = y;
+          };
+          for (let i = 0; i <= ySteps; i++) {
+            for (let j = 0; j <= xSteps; j++) {
+              const v = zMatrix[i][j];
+              if (v === null)
+                continue;
+              if (v === 0) {
+                mark(xArr[j], yArr[i]);
+                continue;
+              }
+              if (j < xSteps) {
+                const vr = zMatrix[i][j + 1];
+                if (vr !== null && vr * v < 0)
+                  mark(xArr[j], yArr[i]);
+              }
+              if (i < ySteps) {
+                const vd = zMatrix[i + 1][j];
+                if (vd !== null && vd * v < 0)
+                  mark(xArr[j], yArr[i]);
+              }
+            }
+          }
+          if (found) {
+            const padX = Math.max((bxMax - bxMin) * 0.15, 0.5);
+            const padY = Math.max((byMax - byMin) * 0.15, 0.5);
+            layout.xaxis = Object.assign({}, layout.xaxis, { range: [bxMin - padX, bxMax + padX], autorange: false });
+            layout.yaxis = Object.assign({}, layout.yaxis, { range: [byMin - padY, byMax + padY], autorange: false });
+          }
+        }
         currentTableData = { type: "grid", x: xArr, y: yArr, z: zMatrix, labels: { x: "X", y: "Y" } };
       } else if (type === "implicit3d") {
         const xR = getAxisRange("x", config);
@@ -5131,7 +5175,13 @@ function computePlot(parsed, params, settings) {
           throw new Error("No surface found in range (isolevel 0). Check the x/y/z ranges or increase 'samples'.");
         }
         currentTraces.push({ type: "three-mesh", positions: mesh.positions, indices: mesh.indices, name: traceName, showlegend: false, color: finalCurveColor });
-        currentTableData = { type: "series", headers: ["x", "y", "z"], rows: [] };
+        const vCount = mesh.positions.length / 3;
+        const stride = Math.max(1, Math.ceil(vCount / 2e3));
+        const meshRows = [];
+        for (let vi = 0; vi < vCount; vi += stride) {
+          meshRows.push([mesh.positions[vi * 3], mesh.positions[vi * 3 + 1], mesh.positions[vi * 3 + 2]]);
+        }
+        currentTableData = { type: "series", headers: ["x", "y", "z"], rows: meshRows };
       } else if (type === "vector2d" || type === "vector3d") {
         const isV3D = type === "vector3d";
         const xR = getAxisRange("x", config);
@@ -5210,7 +5260,8 @@ function computePlot(parsed, params, settings) {
           }
           currentTraces.push({ type: "scatter", mode: "lines", x: lX, y: lY, name: traceName + " (lines)", line: { color: finalCurveColor, width: finalLineWidth * 0.5 }, hoverinfo: "skip", showlegend: false });
           currentTraces.push({ type: "scatter", mode: "markers", x: hX, y: hY, name: traceName, marker: { symbol: "triangle-up", size: 8, angle: ang, color: col, colorscale: settings.colorscale3D, showscale: index === 0 } });
-          layout.xaxis = { scaleanchor: "x", scaleratio: 1 };
+          if (allowEqualAspect)
+            layout.yaxis = { scaleanchor: "x", scaleratio: 1 };
         }
       }
       if (currentTraces.length > 0) {
@@ -21557,6 +21608,51 @@ var Matrix2 = _Matrix2;
 (() => {
   _Matrix2.prototype.isMatrix2 = true;
 })();
+var GridHelper = class extends LineSegments {
+  /**
+   * Constructs a new grid helper.
+   *
+   * @param {number} [size=10] - The size of the grid.
+   * @param {number} [divisions=10] - The number of divisions across the grid.
+   * @param {number|Color|string} [color1=0x444444] - The color of the center line.
+   * @param {number|Color|string} [color2=0x888888] - The color of the lines of the grid.
+   */
+  constructor(size = 10, divisions = 10, color1 = 4473924, color2 = 8947848) {
+    color1 = new Color(color1);
+    color2 = new Color(color2);
+    const center = divisions / 2;
+    const step = size / divisions;
+    const halfSize = size / 2;
+    const vertices = [], colors = [];
+    for (let i = 0, j = 0, k = -halfSize; i <= divisions; i++, k += step) {
+      vertices.push(-halfSize, 0, k, halfSize, 0, k);
+      vertices.push(k, 0, -halfSize, k, 0, halfSize);
+      const color = i === center ? color1 : color2;
+      color.toArray(colors, j);
+      j += 3;
+      color.toArray(colors, j);
+      j += 3;
+      color.toArray(colors, j);
+      j += 3;
+      color.toArray(colors, j);
+      j += 3;
+    }
+    const geometry = new BufferGeometry();
+    geometry.setAttribute("position", new Float32BufferAttribute(vertices, 3));
+    geometry.setAttribute("color", new Float32BufferAttribute(colors, 3));
+    const material = new LineBasicMaterial({ vertexColors: true, toneMapped: false });
+    super(geometry, material);
+    this.type = "GridHelper";
+  }
+  /**
+   * Frees the GPU-related resources allocated by this instance. Call this
+   * method whenever this instance is no longer used in your app.
+   */
+  dispose() {
+    this.geometry.dispose();
+    this.material.dispose();
+  }
+};
 var AxesHelper = class extends LineSegments {
   /**
    * Constructs a new axes helper.
@@ -34462,63 +34558,67 @@ function renderError(container, code, msg) {
   errEl.innerHTML = `<strong style="display:block; margin-bottom:4px;">Error [${code}]</strong>${msg}`;
 }
 function renderTable(container, tableData, settings) {
-  container.innerHTML = "";
-  const borderColor = settings.gridColor;
-  const textColor = settings.textColor;
+  const borderColor = "var(--background-modifier-border)";
+  const textColor = "var(--text-normal)";
   const curveColor = tableData.color || settings.curveColor;
   const fontSize = settings.plotFontSize;
-  const headerStyle = `position: sticky; top: 0; background: #222; z-index: 5; border: 1px solid ${borderColor}; padding: 6px; color: ${curveColor}; text-align: left; font-size: ${fontSize}px;`;
-  const cellStyleNum = `border: 1px solid ${borderColor}; padding: 4px 6px; color: ${textColor}; text-align: right; opacity: 0.8; font-size: ${fontSize}px;`;
-  const cellStyle = `border: 1px solid ${borderColor}; padding: 4px 6px; color: ${textColor}; font-size: ${fontSize}px;`;
-  const wrapper = container.createEl("div", { cls: "mathplot-table-wrapper" });
-  const table = wrapper.createEl("table", { cls: "mathplot-data-table" });
-  table.style.color = textColor;
+  const thStyle = `border:1px solid ${borderColor};color:${curveColor};font-size:${fontSize}px;background:var(--background-secondary);`;
+  const thCorner = thStyle + "left:0;z-index:10;";
+  const tdNum = `border:1px solid ${borderColor};color:${textColor};font-size:${fontSize}px;opacity:0.85;`;
+  const tdTxt = `border:1px solid ${borderColor};color:${textColor};font-size:${fontSize}px;`;
+  const tdRowHead = `border:1px solid ${borderColor};color:${textColor};font-size:${fontSize}px;background:var(--background-secondary);`;
+  const tdIndex = tdNum + "opacity:0.5;";
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  let html = "";
+  let truncatedInfo = "";
   if (tableData.type === "grid" && tableData.labels && tableData.x && tableData.y && tableData.z) {
-    const thead = table.createEl("thead");
-    const hr = thead.createEl("tr");
-    hr.createEl("th", { text: `${tableData.labels.y}\\${tableData.labels.x}`, attr: { style: headerStyle + " left: 0; z-index: 10;" } });
-    tableData.x.forEach((x) => hr.createEl("th", { text: x.toFixed(2), attr: { style: headerStyle } }));
-    const tbody = table.createEl("tbody");
-    tableData.y.forEach((y, i) => {
-      const tr = tbody.createEl("tr");
-      if (i % 2 === 1)
-        tr.classList.add("mathplot-tr-odd");
-      tr.createEl("td", { text: y.toFixed(2), attr: { style: `border: 1px solid ${borderColor}; padding: 4px; font-weight:bold; background: #222; position: sticky; left: 0; z-index: 2; color: ${textColor}; font-size: ${fontSize}px;` } });
-      tableData.z[i].forEach((z) => {
-        tr.createEl("td", { text: z !== null && !isNaN(z) ? z.toFixed(2) : "", attr: { style: cellStyleNum } });
-      });
-    });
-  } else if (tableData.headers && tableData.rows) {
-    const thead = table.createEl("thead");
-    const tr = thead.createEl("tr");
-    tr.createEl("th", { text: "#", attr: { style: headerStyle + " width: 40px;" } });
-    tableData.headers.forEach((h) => {
-      tr.createEl("th", { text: h, attr: { style: headerStyle } });
-    });
-    const tbody = table.createEl("tbody");
-    const maxRows = 2e3;
-    const rowsToRender = tableData.rows.slice(0, maxRows);
-    rowsToRender.forEach((row, i) => {
-      const tr2 = tbody.createEl("tr");
-      if (i % 2 === 1)
-        tr2.classList.add("mathplot-tr-odd");
-      tr2.createEl("td", { text: String(i + 1), attr: { style: cellStyleNum + " text-align: center; opacity: 0.5;" } });
-      row.forEach((cell) => {
-        let txt = "-";
-        let style = cellStyleNum;
-        if (typeof cell === "number")
-          txt = cell.toFixed(4);
-        else if (cell !== null && cell !== void 0) {
-          txt = String(cell);
-          style = cellStyle;
-        }
-        tr2.createEl("td", { text: txt, attr: { style } });
-      });
-    });
-    if (tableData.rows.length > maxRows) {
-      container.createEl("div", { text: `Showing first ${maxRows} of ${tableData.rows.length} rows.`, cls: "mathplot-table-info" });
+    const cols = tableData.x;
+    const maxCols = 40;
+    const colStride = Math.max(1, Math.ceil(cols.length / maxCols));
+    const maxRows = 100;
+    const rowStride = Math.max(1, Math.ceil(tableData.y.length / maxRows));
+    if (colStride > 1 || rowStride > 1) {
+      truncatedInfo = `Sampled every ${colStride} col(s) / ${rowStride} row(s) for display.`;
     }
+    html += `<thead><tr><th class="mp-th mp-corner" style="${thCorner}">${esc(tableData.labels.y)}\\${esc(tableData.labels.x)}</th>`;
+    for (let j = 0; j < cols.length; j += colStride)
+      html += `<th class="mp-th" style="${thStyle}">${cols[j].toFixed(2)}</th>`;
+    html += "</tr></thead><tbody>";
+    for (let i = 0; i < tableData.y.length; i += rowStride) {
+      html += `<tr${i % 2 === 1 ? ' class="mathplot-tr-odd"' : ""}><td class="mp-rowhead" style="${tdRowHead}">${tableData.y[i].toFixed(2)}</td>`;
+      for (let j = 0; j < cols.length; j += colStride) {
+        const z = tableData.z[i][j];
+        html += `<td class="mp-td-num" style="${tdNum}">${z !== null && !isNaN(z) ? z.toFixed(2) : ""}</td>`;
+      }
+      html += "</tr>";
+    }
+    html += "</tbody>";
+  } else if (tableData.headers && tableData.rows) {
+    const maxRows = 1e3;
+    const rows = tableData.rows;
+    const stride = Math.max(1, Math.ceil(rows.length / maxRows));
+    if (stride > 1)
+      truncatedInfo = `Sampled every ${stride} rows (${rows.length} total).`;
+    html += `<thead><tr><th class="mp-th" style="${thStyle}width:40px;">#</th>`;
+    for (const h of tableData.headers)
+      html += `<th class="mp-th" style="${thStyle}">${esc(h)}</th>`;
+    html += "</tr></thead><tbody>";
+    let displayIdx = 0;
+    for (let r = 0; r < rows.length; r += stride, displayIdx++) {
+      html += `<tr${displayIdx % 2 === 1 ? ' class="mathplot-tr-odd"' : ""}><td class="mp-td-num mp-td-index" style="${tdIndex}">${r + 1}</td>`;
+      for (const cell of rows[r]) {
+        if (typeof cell === "number")
+          html += `<td class="mp-td-num" style="${tdNum}">${cell.toFixed(4)}</td>`;
+        else if (cell !== null && cell !== void 0)
+          html += `<td style="${tdTxt}">${esc(String(cell))}</td>`;
+        else
+          html += `<td class="mp-td-num" style="${tdNum}">-</td>`;
+      }
+      html += "</tr>";
+    }
+    html += "</tbody>";
   }
+  container.innerHTML = `<div class="mathplot-table-wrapper"><table class="mathplot-data-table" style="color:${textColor};">${html}</table></div>` + (truncatedInfo ? `<div class="mathplot-table-info">${truncatedInfo}</div>` : "");
 }
 function renderSlider(container, param, settings, onUpdate, onPlayStateChange) {
   const wrapper = container.createEl("div", { cls: "mathplot-slider-wrapper" });
@@ -34619,7 +34719,7 @@ function renderPlot(container, source, settings, renderChild) {
     }
   };
   container.style.border = `${settings.borderWidth} solid ${settings.borderColor}`;
-  container.style.backgroundColor = settings.plotBackgroundColor === "rgba(0, 0, 0, 0)" ? "#111" : settings.plotBackgroundColor;
+  container.style.backgroundColor = settings.plotBackgroundColor === "rgba(0, 0, 0, 0)" ? "var(--background-secondary)" : settings.plotBackgroundColor;
   const onMediaChange = () => updateContainerSize();
   mobileQuery.addEventListener("change", onMediaChange);
   const resizeObserver = new ResizeObserver(() => {
@@ -34783,7 +34883,12 @@ function renderPlot(container, source, settings, renderChild) {
       tableContainer.style.display = "none";
     }
     requestAnimationFrame(() => {
-      updatePlotVisuals();
+      try {
+        if (plotDiv._fullLayout && plotDiv.clientWidth > 0)
+          Plotly.Plots.resize(plotDiv);
+      } catch (e) {
+      }
+      updateThreeSize();
     });
   };
   const renderTableContent = () => {
@@ -34816,6 +34921,13 @@ function renderPlot(container, source, settings, renderChild) {
       mesh.material.dispose();
     });
     threeCtx.meshes.clear();
+    (threeCtx.helpers || []).forEach((h) => {
+      threeCtx.scene.remove(h);
+      if (h.geometry)
+        h.geometry.dispose();
+      if (h.material)
+        h.material.dispose();
+    });
     threeCtx.renderer.dispose();
     threeCtx = null;
     if (threeDiv) {
@@ -34827,29 +34939,43 @@ function renderPlot(container, source, settings, renderChild) {
     if (threeCtx)
       return;
     threeDiv = container.createEl("div", { cls: "three-div" });
+    plotDiv.after(threeDiv);
     threeDiv.style.height = plotDiv.style.height || settings.defaultBlockHeight;
     const width = threeDiv.clientWidth || 600;
     const height = threeDiv.clientHeight || 400;
     const renderer = new WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(width, height);
-    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     threeDiv.appendChild(renderer.domElement);
     const scene = new Scene();
     const camera = new PerspectiveCamera(45, width / height, 0.01, 1e3);
     camera.position.set(1.5, 1.5, 1.5);
-    scene.add(new AmbientLight(16777215, 0.6));
-    const dirLight = new DirectionalLight(16777215, 1);
+    scene.add(new AmbientLight(16777215, 0.55));
+    const dirLight = new DirectionalLight(16777215, 1.1);
     dirLight.position.set(3, 5, 4);
     scene.add(dirLight);
+    const fillLight = new DirectionalLight(16777215, 0.35);
+    fillLight.position.set(-4, -2, -3);
+    scene.add(fillLight);
     const controls = new OrbitControls(camera, renderer.domElement);
-    threeCtx = { renderer, scene, camera, controls, meshes: /* @__PURE__ */ new Map(), rafId: 0, fitted: false };
+    controls.enableDamping = true;
+    threeCtx = { renderer, scene, camera, controls, meshes: /* @__PURE__ */ new Map(), helpers: [], rafId: 0, fitted: false, needsRender: true };
     const loop = () => {
       if (!threeCtx)
         return;
       threeCtx.rafId = requestAnimationFrame(loop);
-      threeCtx.controls.update();
-      threeCtx.renderer.render(threeCtx.scene, threeCtx.camera);
+      const moving = threeCtx.controls.update();
+      if (moving || threeCtx.needsRender) {
+        threeCtx.needsRender = false;
+        threeCtx.renderer.render(threeCtx.scene, threeCtx.camera);
+      }
     };
+    const requestRender = () => {
+      if (threeCtx)
+        threeCtx.needsRender = true;
+    };
+    threeCtx.requestRender = requestRender;
+    controls.addEventListener("change", requestRender);
     loop();
   };
   const updateThreeSize = () => {
@@ -34861,6 +34987,7 @@ function renderPlot(container, source, settings, renderChild) {
     threeCtx.camera.aspect = width / height;
     threeCtx.camera.updateProjectionMatrix();
     threeCtx.renderer.setSize(width, height);
+    threeCtx.requestRender();
   };
   const updateThreeMeshes = (meshTraces) => {
     ensureThreeContext();
@@ -34877,7 +35004,13 @@ function renderPlot(container, source, settings, renderChild) {
         existing.geometry.dispose();
         existing.geometry = geometry;
       } else {
-        const material = new MeshStandardMaterial({ color: trace.color || settings.curveColor, side: DoubleSide, roughness: 0.6, metalness: 0.1 });
+        const material = new MeshStandardMaterial({
+          color: trace.color || settings.curveColor,
+          side: DoubleSide,
+          roughness: 0.45,
+          metalness: 0.05,
+          flatShading: false
+        });
         const mesh = new Mesh(geometry, material);
         threeCtx.scene.add(mesh);
         threeCtx.meshes.set(key, mesh);
@@ -34888,10 +35021,21 @@ function renderPlot(container, source, settings, renderChild) {
         if (bs && isFinite(bs.radius) && bs.radius > 0) {
           threeCtx.camera.position.set(bs.center.x + bs.radius * 2.2, bs.center.y + bs.radius * 1.8, bs.center.z + bs.radius * 2.2);
           threeCtx.controls.target.copy(bs.center);
-          threeCtx.scene.add(new AxesHelper(bs.radius * 1.2));
+          const axes = new AxesHelper(bs.radius * 1.2);
+          axes.position.copy(bs.center);
+          threeCtx.scene.add(axes);
+          threeCtx.helpers.push(axes);
+          const gridSize = bs.radius * 2.4;
+          const grid = new GridHelper(gridSize, 12, 6710886, 4473924);
+          grid.material.transparent = true;
+          grid.material.opacity = 0.35;
+          grid.position.set(bs.center.x, bs.center.y - bs.radius * 1.05, bs.center.z);
+          threeCtx.scene.add(grid);
+          threeCtx.helpers.push(grid);
           threeCtx.fitted = true;
         }
       }
+      threeCtx.requestRender();
     });
     threeCtx.meshes.forEach((mesh, key) => {
       if (!seen.has(key)) {
@@ -34899,6 +35043,7 @@ function renderPlot(container, source, settings, renderChild) {
         mesh.geometry.dispose();
         mesh.material.dispose();
         threeCtx.meshes.delete(key);
+        threeCtx.requestRender();
       }
     });
     updateThreeSize();

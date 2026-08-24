@@ -5,3 +5,6 @@
 2026-07-23 | perf | compute.ts vector2d/vector3d 复用 parser 预编译表达式，不再每次 computePlot 重复 math.compile
 2026-07-23 | feat | implicit3d 重写为 marching cubes（math/marchingCubes.ts）+ Three.js 网格渲染（three-mesh trace，.three-div 容器，OrbitControls）
 2026-07-24 | docs | 记录新增 dev-env 测试体系（vitest 单测 + 浏览器渲染测试），AGENTS.md 补充 npm test / test:browser 用法
+2026-08-25 | perf+style | Show Table 点击不再触发全量重绘、表格改字符串拼接+抽稀渲染、three.js 按需渲染/灯光/网格优化、scaleanchor 自引用修复、implicit3d 表格输出顶点数据、卡片样式改用 Obsidian 主题变量
+2026-08-25 | fix | three-div 插入图表区正后方修复 implicit3d 表格位置；等比例坐标仅限纯隐函数/向量场 2D 组合，混绘不再拉宽坐标轴
+2026-08-25 | style | 表格边框/文字色改用 Obsidian 主题变量（亮暗自适应），表头/行头背景改内联以防主题 !important 覆盖

@@ -12,66 +12,71 @@ export function renderError(container: HTMLElement, code: string, msg: string) {
 }
 
 export function renderTable(container: HTMLElement, tableData: TableData, settings: MathPlotSettings) {
-    container.innerHTML = "";
-    const borderColor = settings.gridColor;
-    const textColor = settings.textColor;
+    // 边框与文字跟随 Obsidian 主题（亮/暗自适应）；表头仍用曲线色以呼应图例
+    const borderColor = "var(--background-modifier-border)";
+    const textColor = "var(--text-normal)";
     const curveColor = tableData.color || settings.curveColor;
     const fontSize = settings.plotFontSize;
 
-    const headerStyle = `position: sticky; top: 0; background: #222; z-index: 5; border: 1px solid ${borderColor}; padding: 6px; color: ${curveColor}; text-align: left; font-size: ${fontSize}px;`;
-    const cellStyleNum = `border: 1px solid ${borderColor}; padding: 4px 6px; color: ${textColor}; text-align: right; opacity: 0.8; font-size: ${fontSize}px;`;
-    const cellStyle = `border: 1px solid ${borderColor}; padding: 4px 6px; color: ${textColor}; font-size: ${fontSize}px;`;
+    // 性能：整表拼成 HTML 字符串一次性写入，避免逐单元格 createEl（大网格数千节点会卡 1s+）
+    const thStyle = `border:1px solid ${borderColor};color:${curveColor};font-size:${fontSize}px;background:var(--background-secondary);`;
+    const thCorner = thStyle + "left:0;z-index:10;";
+    const tdNum = `border:1px solid ${borderColor};color:${textColor};font-size:${fontSize}px;opacity:0.85;`;
+    const tdTxt = `border:1px solid ${borderColor};color:${textColor};font-size:${fontSize}px;`;
+    const tdRowHead = `border:1px solid ${borderColor};color:${textColor};font-size:${fontSize}px;background:var(--background-secondary);`;
+    const tdIndex = tdNum + "opacity:0.5;";
+    const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-    const wrapper = container.createEl("div", { cls: "mathplot-table-wrapper" });
-    const table = wrapper.createEl("table", { cls: "mathplot-data-table" });
-    table.style.color = textColor;
+    let html = "";
+    let truncatedInfo = "";
 
     if (tableData.type === 'grid' && tableData.labels && tableData.x && tableData.y && tableData.z) {
-        const thead = table.createEl("thead");
-        const hr = thead.createEl("tr");
-        hr.createEl("th", { text: `${tableData.labels.y}\\${tableData.labels.x}`, attr: { style: headerStyle + " left: 0; z-index: 10;" } });
-        tableData.x.forEach((x: number) => hr.createEl("th", { text: x.toFixed(2), attr: { style: headerStyle } }));
-
-        const tbody = table.createEl("tbody");
-        tableData.y.forEach((y: number, i: number) => {
-            const tr = tbody.createEl("tr");
-            if (i % 2 === 1) tr.classList.add("mathplot-tr-odd");
-            tr.createEl("td", { text: y.toFixed(2), attr: { style: `border: 1px solid ${borderColor}; padding: 4px; font-weight:bold; background: #222; position: sticky; left: 0; z-index: 2; color: ${textColor}; font-size: ${fontSize}px;` } });
-            tableData.z![i].forEach((z: number | null) => {
-                tr.createEl("td", { text: (z !== null && !isNaN(z)) ? z.toFixed(2) : "", attr: { style: cellStyleNum } });
-            });
-        });
-    } else if (tableData.headers && tableData.rows) {
-        const thead = table.createEl("thead");
-        const tr = thead.createEl("tr");
-        tr.createEl("th", { text: "#", attr: { style: headerStyle + " width: 40px;" } });
-
-        tableData.headers.forEach((h: string) => {
-            tr.createEl("th", { text: h, attr: { style: headerStyle } });
-        });
-
-        const tbody = table.createEl("tbody");
-        const maxRows = 2000;
-        const rowsToRender = tableData.rows.slice(0, maxRows);
-
-        rowsToRender.forEach((row: any[], i: number) => {
-            const tr = tbody.createEl("tr");
-            if (i % 2 === 1) tr.classList.add("mathplot-tr-odd");
-            tr.createEl("td", { text: String(i + 1), attr: { style: cellStyleNum + " text-align: center; opacity: 0.5;" } });
-
-            row.forEach((cell: any) => {
-                let txt = "-";
-                let style = cellStyleNum;
-                if (typeof cell === 'number') txt = cell.toFixed(4);
-                else if (cell !== null && cell !== undefined) { txt = String(cell); style = cellStyle; }
-                tr.createEl("td", { text: txt, attr: { style } });
-            });
-        });
-
-        if (tableData.rows.length > maxRows) {
-            container.createEl("div", { text: `Showing first ${maxRows} of ${tableData.rows.length} rows.`, cls: "mathplot-table-info" });
+        const cols = tableData.x;
+        // 网格表列数过多时均匀抽稀，防止 DOM 爆炸
+        const maxCols = 40;
+        const colStride = Math.max(1, Math.ceil(cols.length / maxCols));
+        const maxRows = 100;
+        const rowStride = Math.max(1, Math.ceil(tableData.y.length / maxRows));
+        if (colStride > 1 || rowStride > 1) {
+            truncatedInfo = `Sampled every ${colStride} col(s) / ${rowStride} row(s) for display.`;
         }
+
+        html += `<thead><tr><th class="mp-th mp-corner" style="${thCorner}">${esc(tableData.labels.y)}\\${esc(tableData.labels.x)}</th>`;
+        for (let j = 0; j < cols.length; j += colStride) html += `<th class="mp-th" style="${thStyle}">${cols[j].toFixed(2)}</th>`;
+        html += "</tr></thead><tbody>";
+        for (let i = 0; i < tableData.y.length; i += rowStride) {
+            html += `<tr${i % 2 === 1 ? ' class="mathplot-tr-odd"' : ""}><td class="mp-rowhead" style="${tdRowHead}">${tableData.y[i].toFixed(2)}</td>`;
+            for (let j = 0; j < cols.length; j += colStride) {
+                const z = tableData.z[i][j];
+                html += `<td class="mp-td-num" style="${tdNum}">${(z !== null && !isNaN(z)) ? z.toFixed(2) : ""}</td>`;
+            }
+            html += "</tr>";
+        }
+        html += "</tbody>";
+    } else if (tableData.headers && tableData.rows) {
+        const maxRows = 1000;
+        const rows = tableData.rows;
+        const stride = Math.max(1, Math.ceil(rows.length / maxRows));
+        if (stride > 1) truncatedInfo = `Sampled every ${stride} rows (${rows.length} total).`;
+
+        html += `<thead><tr><th class="mp-th" style="${thStyle}width:40px;">#</th>`;
+        for (const h of tableData.headers) html += `<th class="mp-th" style="${thStyle}">${esc(h)}</th>`;
+        html += "</tr></thead><tbody>";
+        let displayIdx = 0;
+        for (let r = 0; r < rows.length; r += stride, displayIdx++) {
+            html += `<tr${displayIdx % 2 === 1 ? ' class="mathplot-tr-odd"' : ""}><td class="mp-td-num mp-td-index" style="${tdIndex}">${r + 1}</td>`;
+            for (const cell of rows[r]) {
+                if (typeof cell === 'number') html += `<td class="mp-td-num" style="${tdNum}">${cell.toFixed(4)}</td>`;
+                else if (cell !== null && cell !== undefined) html += `<td style="${tdTxt}">${esc(String(cell))}</td>`;
+                else html += `<td class="mp-td-num" style="${tdNum}">-</td>`;
+            }
+            html += "</tr>";
+        }
+        html += "</tbody>";
     }
+
+    container.innerHTML = `<div class="mathplot-table-wrapper"><table class="mathplot-data-table" style="color:${textColor};">${html}</table></div>`
+        + (truncatedInfo ? `<div class="mathplot-table-info">${truncatedInfo}</div>` : "");
 }
 
 export function renderSlider(container: HTMLElement, param: ParameterDef, settings: MathPlotSettings, onUpdate: (val: number) => void, onPlayStateChange: (playing: boolean) => void) {
@@ -193,7 +198,7 @@ export function renderPlot(container: HTMLElement, source: string, settings: Mat
     };
 
     container.style.border = `${settings.borderWidth} solid ${settings.borderColor}`;
-    container.style.backgroundColor = settings.plotBackgroundColor === "rgba(0, 0, 0, 0)" ? "#111" : settings.plotBackgroundColor;
+    container.style.backgroundColor = settings.plotBackgroundColor === "rgba(0, 0, 0, 0)" ? "var(--background-secondary)" : settings.plotBackgroundColor;
     
     const onMediaChange = () => updateContainerSize();
     mobileQuery.addEventListener("change", onMediaChange);
@@ -380,8 +385,13 @@ export function renderPlot(container: HTMLElement, source: string, settings: Mat
         } else {
             tableContainer.style.display = "none";
         }
+        // 表格在图表下方展开/收起，图表尺寸不变，无需 Plotly.react 全量重绘；
+        // 仅通知 Plotly/three 校准一次当前尺寸即可
         requestAnimationFrame(() => {
-            updatePlotVisuals();
+            try {
+                if ((plotDiv as any)._fullLayout && plotDiv.clientWidth > 0) Plotly.Plots.resize(plotDiv);
+            } catch (e) { /* ignore */ }
+            updateThreeSize();
         });
     };
 
@@ -420,6 +430,11 @@ export function renderPlot(container: HTMLElement, source: string, settings: Mat
             mesh.material.dispose();
         });
         threeCtx.meshes.clear();
+        (threeCtx.helpers || []).forEach((h: any) => {
+            threeCtx.scene.remove(h);
+            if (h.geometry) h.geometry.dispose();
+            if (h.material) h.material.dispose();
+        });
         threeCtx.renderer.dispose();
         threeCtx = null;
         if (threeDiv) { threeDiv.remove(); threeDiv = null; }
@@ -428,6 +443,8 @@ export function renderPlot(container: HTMLElement, source: string, settings: Mat
     const ensureThreeContext = () => {
         if (threeCtx) return;
         threeDiv = container.createEl("div", { cls: "three-div" });
+        // 紧贴图表区插入，保证与 Plotly 图表一致的布局顺序（图在上，控制栏/表格在下）
+        plotDiv.after(threeDiv);
         threeDiv.style.height = plotDiv.style.height || settings.defaultBlockHeight;
 
         const width = threeDiv.clientWidth || 600;
@@ -435,28 +452,41 @@ export function renderPlot(container: HTMLElement, source: string, settings: Mat
 
         const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
         renderer.setSize(width, height);
-        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // 高分屏限制倍率，避免片元数爆炸
         threeDiv.appendChild(renderer.domElement);
 
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(45, width / height, 0.01, 1000);
         camera.position.set(1.5, 1.5, 1.5);
 
-        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-        const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+        // 三点式打光，接近 Plotly 3D 的柔和观感
+        scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.1);
         dirLight.position.set(3, 5, 4);
         scene.add(dirLight);
+        const fillLight = new THREE.DirectionalLight(0xffffff, 0.35);
+        fillLight.position.set(-4, -2, -3);
+        scene.add(fillLight);
 
         const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
 
-        threeCtx = { renderer, scene, camera, controls, meshes: new Map<string, any>(), rafId: 0, fitted: false };
+        threeCtx = { renderer, scene, camera, controls, meshes: new Map<string, any>(), helpers: [], rafId: 0, fitted: false, needsRender: true };
 
+        // 按需渲染：RAF 常驻但只做 cheap 检查，仅相机仍在运动或数据更新时才真正 render
+        // （damping 生效期间 controls.update() 返回 true，保证惯性动画完整播完）
         const loop = () => {
             if (!threeCtx) return;
             threeCtx.rafId = requestAnimationFrame(loop);
-            threeCtx.controls.update();
-            threeCtx.renderer.render(threeCtx.scene, threeCtx.camera);
+            const moving = threeCtx.controls.update();
+            if (moving || threeCtx.needsRender) {
+                threeCtx.needsRender = false;
+                threeCtx.renderer.render(threeCtx.scene, threeCtx.camera);
+            }
         };
+        const requestRender = () => { if (threeCtx) threeCtx.needsRender = true; };
+        threeCtx.requestRender = requestRender;
+        controls.addEventListener("change", requestRender);
         loop();
     };
 
@@ -467,6 +497,7 @@ export function renderPlot(container: HTMLElement, source: string, settings: Mat
         threeCtx.camera.aspect = width / height;
         threeCtx.camera.updateProjectionMatrix();
         threeCtx.renderer.setSize(width, height);
+        threeCtx.requestRender();
     };
 
     const updateThreeMeshes = (meshTraces: any[]) => {
@@ -488,7 +519,13 @@ export function renderPlot(container: HTMLElement, source: string, settings: Mat
                 existing.geometry.dispose();
                 existing.geometry = geometry;
             } else {
-                const material = new THREE.MeshStandardMaterial({ color: trace.color || settings.curveColor, side: THREE.DoubleSide, roughness: 0.6, metalness: 0.1 });
+                const material = new THREE.MeshStandardMaterial({
+                    color: trace.color || settings.curveColor,
+                    side: THREE.DoubleSide,
+                    roughness: 0.45,
+                    metalness: 0.05,
+                    flatShading: false
+                });
                 const mesh = new THREE.Mesh(geometry, material);
                 threeCtx.scene.add(mesh);
                 threeCtx.meshes.set(key, mesh);
@@ -501,10 +538,25 @@ export function renderPlot(container: HTMLElement, source: string, settings: Mat
                 if (bs && isFinite(bs.radius) && bs.radius > 0) {
                     threeCtx.camera.position.set(bs.center.x + bs.radius * 2.2, bs.center.y + bs.radius * 1.8, bs.center.z + bs.radius * 2.2);
                     threeCtx.controls.target.copy(bs.center);
-                    threeCtx.scene.add(new THREE.AxesHelper(bs.radius * 1.2));
+
+                    // 坐标轴 + 底部参考网格，向 Plotly 3D 的观感靠拢
+                    const axes = new THREE.AxesHelper(bs.radius * 1.2);
+                    axes.position.copy(bs.center);
+                    threeCtx.scene.add(axes);
+                    threeCtx.helpers.push(axes);
+
+                    const gridSize = bs.radius * 2.4;
+                    const grid = new THREE.GridHelper(gridSize, 12, 0x666666, 0x444444);
+                    (grid.material as THREE.Material).transparent = true;
+                    (grid.material as THREE.Material).opacity = 0.35;
+                    grid.position.set(bs.center.x, bs.center.y - bs.radius * 1.05, bs.center.z);
+                    threeCtx.scene.add(grid);
+                    threeCtx.helpers.push(grid);
+
                     threeCtx.fitted = true;
                 }
             }
+            threeCtx.requestRender();
         });
 
         // Drop meshes whose traces disappeared
@@ -514,6 +566,7 @@ export function renderPlot(container: HTMLElement, source: string, settings: Mat
                 mesh.geometry.dispose();
                 mesh.material.dispose();
                 threeCtx.meshes.delete(key);
+                threeCtx.requestRender();
             }
         });
 

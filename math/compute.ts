@@ -57,6 +57,11 @@ export function computePlot(parsed: ParseResult, params: Record<string, number>,
 
         const is3D = parsed.plots.some(p => ['explicit3d', 'parametric3d', 'vector3d', 'implicit3d', 'spherical', 'cylindrical'].includes(p.type));
 
+        // 等比例坐标（y 锚定 x）只对纯隐函数/向量场的 2D 组合启用；
+        // 与普通曲线混绘时启用会强行拉宽另一轴，产生大片空白
+        const allowEqualAspect = !is3D && parsed.plots.length > 0
+            && parsed.plots.every(p => p.type === 'implicit2d' || p.type === 'vector2d');
+
         const topMargin = 10;
         const margin = is3D
             ? { l: 0, r: 0, t: topMargin, b: 0 }
@@ -329,7 +334,35 @@ export function computePlot(parsed: ParseResult, params: Record<string, number>,
                     zMatrix.push(row);
                 }
                 currentTraces.push({ z: zMatrix, x: xArr, y: yArr, type: 'contour', name: traceName, showscale: false, contours: { coloring: 'none', showlines: true, start: 0, end: 0, size: 0 }, line: { width: finalLineWidth, color: finalCurveColor }, hovertemplate: 'x: %{x:.4f}<br>y: %{y:.4f}<extra></extra>' });
-                layout.xaxis = { scaleanchor: 'x', scaleratio: 1 };
+                if (allowEqualAspect) layout.yaxis = { scaleanchor: 'x', scaleratio: 1 };
+
+                // 自动取景：用户未显式指定坐标范围时，把显示范围收紧到 0 等值线包围盒（+15% 边距）
+                const hasExplicitRange = config['xrange'] || config['yrange'] || config['range'] || config['domain']
+                    || parsed.globalConfig['xrange'] || parsed.globalConfig['yrange']
+                    || parsed.globalConfig['range'] || parsed.globalConfig['domain'];
+                if (!hasExplicitRange) {
+                    let bxMin = Infinity, bxMax = -Infinity, byMin = Infinity, byMax = -Infinity, found = false;
+                    const mark = (x: number, y: number) => {
+                        found = true;
+                        if (x < bxMin) bxMin = x; if (x > bxMax) bxMax = x;
+                        if (y < byMin) byMin = y; if (y > byMax) byMax = y;
+                    };
+                    for (let i = 0; i <= ySteps; i++) {
+                        for (let j = 0; j <= xSteps; j++) {
+                            const v = zMatrix[i][j];
+                            if (v === null) continue;
+                            if (v === 0) { mark(xArr[j], yArr[i]); continue; }
+                            if (j < xSteps) { const vr = zMatrix[i][j + 1]; if (vr !== null && vr * v < 0) mark(xArr[j], yArr[i]); }
+                            if (i < ySteps) { const vd = zMatrix[i + 1][j]; if (vd !== null && vd * v < 0) mark(xArr[j], yArr[i]); }
+                        }
+                    }
+                    if (found) {
+                        const padX = Math.max((bxMax - bxMin) * 0.15, 0.5);
+                        const padY = Math.max((byMax - byMin) * 0.15, 0.5);
+                        layout.xaxis = Object.assign({}, layout.xaxis, { range: [bxMin - padX, bxMax + padX], autorange: false });
+                        layout.yaxis = Object.assign({}, layout.yaxis, { range: [byMin - padY, byMax + padY], autorange: false });
+                    }
+                }
                 currentTableData = { type: 'grid', x: xArr, y: yArr, z: zMatrix, labels: { x: 'X', y: 'Y' } };
 
             } else if (type === 'implicit3d') {
@@ -353,7 +386,15 @@ export function computePlot(parsed: ParseResult, params: Record<string, number>,
                 }
 
                 currentTraces.push({ type: 'three-mesh', positions: mesh.positions, indices: mesh.indices, name: traceName, showlegend: false, color: finalCurveColor });
-                currentTableData = { type: 'series', headers: ['x', 'y', 'z'], rows: [] };
+
+                // 表格数据：网格顶点（x,y,z），顶点过多时均匀抽稀到 2000 行
+                const vCount = mesh.positions.length / 3;
+                const stride = Math.max(1, Math.ceil(vCount / 2000));
+                const meshRows: any[][] = [];
+                for (let vi = 0; vi < vCount; vi += stride) {
+                    meshRows.push([mesh.positions[vi * 3], mesh.positions[vi * 3 + 1], mesh.positions[vi * 3 + 2]]);
+                }
+                currentTableData = { type: 'series', headers: ['x', 'y', 'z'], rows: meshRows };
 
             } else if (type === 'vector2d' || type === 'vector3d') {
                 const isV3D = type === 'vector3d';
@@ -428,7 +469,7 @@ export function computePlot(parsed: ParseResult, params: Record<string, number>,
                     }
                     currentTraces.push({ type: 'scatter', mode: 'lines', x: lX, y: lY, name: traceName + " (lines)", line: { color: finalCurveColor, width: finalLineWidth * 0.5 }, hoverinfo: 'skip', showlegend: false });
                     currentTraces.push({ type: 'scatter', mode: 'markers', x: hX, y: hY, name: traceName, marker: { symbol: 'triangle-up', size: 8, angle: ang, color: col, colorscale: settings.colorscale3D, showscale: index === 0 } });
-                    layout.xaxis = { scaleanchor: 'x', scaleratio: 1 };
+                    if (allowEqualAspect) layout.yaxis = { scaleanchor: 'x', scaleratio: 1 };
                 }
             }
 
